@@ -1,0 +1,50 @@
+name: Build catalog
+
+on:
+  schedule:
+    - cron: "17 3 * * 1" # Mondays 03:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-catalog
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Build catalog
+        # Downloads Gutenberg's official RDF archive (fails clearly if it can't) and
+        # refuses to produce a catalog under 80% of the previously published book count.
+        run: >
+          python build_catalog.py
+          --previous-manifest "https://github.com/${{ github.repository }}/releases/download/latest/manifest.json"
+
+      - name: Publish to release "latest"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -s dist/catalog.json.gz
+          test -s dist/manifest.json
+          if ! gh release view latest >/dev/null 2>&1; then
+            gh release create latest \
+              --title "Latest catalog" \
+              --notes "Rolling release: weekly Project Gutenberg catalog for the Rawn app. Assets are replaced on every build."
+          fi
+          # Catalog first, manifest last, so the manifest never points at a missing catalog.
+          gh release upload latest dist/catalog.json.gz --clobber
+          gh release upload latest dist/manifest.json --clobber
